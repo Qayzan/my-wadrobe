@@ -24,13 +24,32 @@ function parseJSON(text) {
   const clean = text.replace(/```json|```/g, "").trim();
   const s = clean.indexOf("{") >= 0 ? clean.indexOf("{") : clean.indexOf("[");
   const e = Math.max(clean.lastIndexOf("}"), clean.lastIndexOf("]"));
+  if (s < 0 || e < 0) throw new Error("The AI didn't return a readable result. Try again.");
   return JSON.parse(clean.slice(s, e + 1));
 }
 
+// Resize the photo down before sending, so it stays under Vercel's ~4.5MB
+// request limit (a full phone photo as base64 is often larger). Also faster + cheaper.
+// Always outputs JPEG. Returns { b64, media }.
 const fileToB64 = (file) =>
   new Promise((res, rej) => {
     const r = new FileReader();
-    r.onload = () => res(r.result.split(",")[1]);
+    r.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const MAX = 1024;
+        let { width, height } = img;
+        if (width > height && width > MAX) { height = Math.round(height * MAX / width); width = MAX; }
+        else if (height > MAX) { width = Math.round(width * MAX / height); height = MAX; }
+        const canvas = document.createElement("canvas");
+        canvas.width = width; canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
+        res({ b64: dataUrl.split(",")[1], media: "image/jpeg" });
+      };
+      img.onerror = rej;
+      img.src = r.result;
+    };
     r.onerror = rej;
     r.readAsDataURL(file);
   });
@@ -62,8 +81,7 @@ export default function Wardrobe() {
     let working = items;
     for (const file of files) {
       try {
-        const b64 = await fileToB64(file);
-        const media = file.type || "image/jpeg";
+        const { b64, media } = await fileToB64(file);
         const dataUrl = `data:${media};base64,${b64}`;
         const text = await callClaude([{
           role: "user",
